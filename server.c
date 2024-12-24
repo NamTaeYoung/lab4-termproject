@@ -18,14 +18,36 @@ pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void broadcast_message(const char *message, int exclude_socket) {
     pthread_mutex_lock(&clients_mutex);
-
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (clients[i] != NULL && clients[i]->socket != exclude_socket) {
             send(clients[i]->socket, message, strlen(message), 0);
         }
     }
-
     pthread_mutex_unlock(&clients_mutex);
+}
+
+void handle_file_transfer(int client_socket, const char *filename) {
+    FILE *file = fopen(filename, "rb");
+    char buffer[BUFFER_SIZE];
+
+    if (file == NULL) {
+        snprintf(buffer, sizeof(buffer), "ERROR: File %s not found.\n", filename);
+        send(client_socket, buffer, strlen(buffer), 0);
+        return;
+    }
+
+    snprintf(buffer, sizeof(buffer), "START_FILE %s\n", filename);
+    send(client_socket, buffer, strlen(buffer), 0);
+
+    while (!feof(file)) {
+        size_t bytes_read = fread(buffer, 1, BUFFER_SIZE, file);
+        send(client_socket, buffer, bytes_read, 0);
+    }
+
+    strcpy(buffer, "END_FILE\n");
+    send(client_socket, buffer, strlen(buffer), 0);
+
+    fclose(file);
 }
 
 void *handle_client(void *arg) {
@@ -33,7 +55,6 @@ void *handle_client(void *arg) {
     char buffer[BUFFER_SIZE];
     char message[BUFFER_SIZE];
 
-    // Receive username
     if (recv(client->socket, client->username, sizeof(client->username), 0) <= 0) {
         close(client->socket);
         free(client);
@@ -67,9 +88,14 @@ void *handle_client(void *arg) {
             pthread_exit(NULL);
         }
 
-        snprintf(message, sizeof(message), "%s: %s", client->username, buffer);
-        printf("%s", message);
-        broadcast_message(message, client->socket);
+        if (strncmp(buffer, "!sendfile", 9) == 0) {
+            char *filename = buffer + 10;
+            handle_file_transfer(client->socket, filename);
+        } else {
+            snprintf(message, sizeof(message), "%s: %s", client->username, buffer);
+            printf("%s", message);
+            broadcast_message(message, client->socket);
+        }
     }
 }
 
